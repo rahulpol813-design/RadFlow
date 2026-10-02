@@ -24,6 +24,27 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Optional, List, Dict, Any
 
+
+@dataclass
+class ActivityLogDTO:
+    """Data Transfer Object for logging image activity."""
+    clinician_id: str
+    patient_id: str
+    study_instance_uid: str
+    action_name: str
+    frame_id: Optional[int] = None
+    is_cache_hit: bool = False
+    latency_ms: Optional[int] = None
+
+@dataclass
+class AssignmentDTO:
+    """Data Transfer Object for creating clinician assignments."""
+    clinician_id: str
+    patient_id: str
+    study_instance_uid: str
+    sla_hours: Optional[int] = 24
+
+
 class AuditRepository(ABC):
     """Abstract Repository Interface decoupling DB dialect logic from upper services."""
 
@@ -64,24 +85,3 @@ class AuditRepository(ABC):
         """
         pass
 
-@dataclass
-class ActivityLogDTO(ABC):
-    """Data Transfer Object for logging image activity."""
-    def __init__(self):
-        clinician_id: str 
-        patient_id: str
-        study_instance_uid: str
-        action_name: str
-        frame_id: Optional[int] = None
-        is_cache_hit: Optional[bool] = None
-        latency_ms: Optional[int] = None
-
-
-@dataclass
-class AssignmentDTO(ABC):
-    """Data Transfer Object for creating clinician assignments."""
-    def __init__(self):
-        clinician_id: str
-        patient_id: str
-        study_instance_uid: str
-        sla_hours: Optional[int] = 24

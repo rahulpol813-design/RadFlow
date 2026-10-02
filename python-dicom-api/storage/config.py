@@ -4,79 +4,91 @@
 # Create a central configuration module that dynamically determines which dialect to load 
 # and constructs the correct connection URL without hardcoding credentials into your application code.
 
-# Enviroment Variables:``
-# DB_DIALECT = "mysql"  # Example dialect, can be changed to 'mysql', 'sqlite', etc.
-# DB_HOST = "localhost"
-# DB_PORT = 1443 # 5432 : PostgreSQL, 1433 : SQL Server
-# DB_NAME = "mydatabase"
-# DB_USER = "myuser"
-# DB_PASSWORD = "mypassword"
-# ODBC_DRIVER = "ODBC Driver 17 for SQL Server"  # Example ODBC driver, can be changed based on the database
-
-
-from abc import ABC, abstractmethod
-from typing import Optional
 import os
 import urllib.parse
+from abc import ABC, abstractmethod
+from typing import Optional
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Search current directory and root directory for .env
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if not env_path.exists():
+    env_path = Path.cwd() / ".env"
+print(f"[DEBUG] Loading environment variables from: {env_path}")    
+load_dotenv(dotenv_path=env_path)
+
 
 class DatabaseConfig(ABC):
-    def __init__(self):
-        self.host :str = os.getenv("DB_HOST", "localhost")   
+    def __init__(self) -> None:
+        self.host: str = os.getenv("DB_HOST", "127.0.0.1")
         raw_port = os.getenv("DB_PORT")
-        self.port : Optional[int]= int(raw_port) if raw_port else None  # Port can be Nonne
-        self.username : Optional[str] = os.getenv("DB_USER", None)  # Username can be None
-        self.password : Optional[str] = os.getenv("DB_PASSWORD", None)  # Password can be None
-        self.database : Optional[str] = os.getenv("DB_NAME", None)  # Database name can be None
+        self.port: Optional[int] = int(raw_port) if raw_port else 1434
+        self.username: Optional[str] = os.getenv("DB_USER")
+        self.password: Optional[str] = os.getenv("DB_PASSWORD")
+        self.database: str = os.getenv("DB_NAME", "radflow")
 
-    def _get_escaped_credentials(self) -> str:
-        """Helper to safely format and encode username:password for URIs."""
-        if not self.username:
-            return ""
-        user = urllib.parse.quote_plus(self.username)
-        if self.password:
-            pwd = urllib.parse.quote_plus(self.password)
-            return f"{user}:{pwd}@"
-        return f"{user}@"
-    
     @abstractmethod
-    def build_connection_url(self) -> str: pass
-
-class SqlServerConfig(DatabaseConfig):
-    def __init__(self):
-        super().__init__()
-        self.driver = os.getenv("ODBC_DRIVER", "ODBC Driver 17 for SQL Server")
-        self.port = self.port or 1433  # Default SQL Server port
-
-
-     def build_connection_url(self) -> str:
-            creds = self._get_escaped_credentials()
-            encoded_driver = urllib.parse.quote_plus(self.driver)
-            return (
-                f"mssql+pyodbc://{creds}{self.host}:{self.port}/{self.database}"
-                f"?driver={encoded_driver}&TrustServerCertificate=yes"
-            )    
-
-
-class PostgresConfig(DatabaseConfig):
-    def __init__(self):
-        super().__init__()
-        self.port = self.port or 5432  # Default PostgreSQL port
     def build_connection_url(self) -> str:
-        return f"postgresql+psycopg2://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
-
-
-#Factory function to get the appropriate database configuration based on the dialect
-class ConfigFactory:
-    def __init__(self):
         pass
 
+
+class SqlServerConfig(DatabaseConfig):
+    def __init__(self) -> None:
+        super().__init__()
+        self.driver: str = os.getenv("ODBC_DRIVER", "ODBC Driver 17 for SQL Server")
+        self.trusted_connection: str = os.getenv("DB_TRUSTED_CONNECTION", "yes").lower()
+    
+    def build_connection_url(self) -> str:
+        # Default to (local) which uses Shared Memory IPC
+        server_target = self.host if self.host and self.host != "127.0.0.1" else "(local)"
+
+        is_trusted = self.trusted_connection in ("yes", "true", "1")
+
+        if is_trusted:
+            odbc_str = (
+                f"DRIVER={{{self.driver}}};"
+                f"SERVER={server_target};"
+                f"DATABASE={self.database};"
+                "Trusted_Connection=yes;"
+                "TrustServerCertificate=yes;"
+            )
+        else:
+            odbc_str = (
+                f"DRIVER={{{self.driver}}};"
+                f"SERVER={server_target};"
+                f"DATABASE={self.database};"
+                f"UID={self.username};"
+                f"PWD={self.password};"
+                "TrustServerCertificate=yes;"
+            )
+
+        print(f"\n[DEBUG] Connecting via SQL Auth: DRIVER={{{self.driver}}};SERVER={server_target};DATABASE={self.database};UID={self.username};TrustServerCertificate=yes;\n")
+        encoded_odbc = urllib.parse.quote_plus(odbc_str)
+        return f"mssql+pyodbc:///?odbc_connect={encoded_odbc}"
+
+class PostgresConfig(DatabaseConfig):
+    def __init__(self) -> None:
+        super().__init__()
+        self.port = self.port or 5432
+
+    def build_connection_url(self) -> str:
+        user = urllib.parse.quote_plus(self.username) if self.username else ""
+        pwd = f":{urllib.parse.quote_plus(self.password)}" if self.password else ""
+        creds = f"{user}{pwd}@" if user else ""
+        return f"postgresql+psycopg2://{creds}{self.host}:{self.port}/{self.database}"
+
+
+class ConfigFactory:
     @staticmethod
     def get_config() -> DatabaseConfig:
         dialect = os.getenv("DB_DIALECT", "mssql").lower()
-        if dialect == "mssql":
+        if dialect in ("mssql", "sqlserver"):
             return SqlServerConfig()
-        elif dialect == "postgresql":
+        elif dialect in ("postgresql", "postgres"):
             return PostgresConfig()
         else:
-            raise ValueError(f"Unsupported DB_DIALECT: {dialect}. Supported dialects are 'mssql' and 'postgresql'.")
-
+            raise ValueError(
+                f"Unsupported DB_DIALECT: '{dialect}'. "
+                f"Supported dialects are 'mssql' and 'postgresql'."
+            )
